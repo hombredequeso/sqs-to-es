@@ -1,0 +1,38 @@
+version: '2.2'
+services:
+
+  es01:
+    image: docker.elastic.co/elasticsearch/elasticsearch:7.4.0
+    container_name: es01
+    environment:
+      - discovery.type=single-node
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+    ports:
+      - 9200:9200
+      - 9300:9300
+    volumes:
+      - esdata01:/usr/share/elasticsearch/data
+    networks:
+      - esnet
+
+  localstack-sqs:
+    image: localstack/localstack
+    ports:
+      - 4576:4576
+      - 8080:8080
+    environment:
+      - SERVICES=sqs
+      - TMPDIR=/tmp
+    networks:
+      - esnet
+
+volumes:
+  esdata01:
+    driver: local
+
+networks:
+  esnet:
+
