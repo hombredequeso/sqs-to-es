@@ -60,7 +60,10 @@ class SqsService(sqsEndpoint: String)(implicit system: ActorSystem) extends Stri
 
     assertQueueExists(queueUrl)
 
-    val sourceSettings = SqsSourceSettings().withCloseOnEmptyReceive(true).withWaitTime(10.milliseconds)
+    val sourceSettings = SqsSourceSettings()
+      .withCloseOnEmptyReceive(true)
+      .withWaitTime(10.milliseconds)
+      .withVisibilityTimeout(1.second)
 
     val source: Source[Message, UniqueKillSwitch] =
       SqsSource(queueUrl, sourceSettings).viaMat(KillSwitches.single)(Keep.right)

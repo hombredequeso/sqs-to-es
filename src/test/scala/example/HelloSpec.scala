@@ -39,7 +39,7 @@ class MainSpec
     awsSqsClient.close()
     TestKit.shutdownActorSystem(system)
     // shutdown(system)
-    // super.afterAll()
+    super.afterAll()
   }
 
 
@@ -89,6 +89,7 @@ class MainSpec
       .map(m => {
         val r= MessageAction.delete(m)
         r
+        MessageAction.ignore(m)
       })
       .toMat(sqsSink)(Keep.both)
       .run()
@@ -96,6 +97,8 @@ class MainSpec
     val resultAssertion: Future[Assertion] = pipeline._2.map[Assertion](_ => {
       processedMessageCount should ===(1)
     })
+
+    // and should wait a bit and confirm there are no messages left in the queue.
 
     resultAssertion
   }
