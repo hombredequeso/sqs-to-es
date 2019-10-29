@@ -1,13 +1,12 @@
 
 import java.net.URI
-import java.util
 import java.util.concurrent.{CompletableFuture, CompletionStage}
 
 import akka.Done
 import akka.actor.ActorSystem
 import akka.stream._
-import akka.stream.alpakka.sqs.MessageAction
-import akka.stream.scaladsl.{Keep, Sink, Source}
+import akka.stream.alpakka.sqs.{MessageAction, SqsSourceSettings}
+import akka.stream.scaladsl.{Keep, RunnableGraph, Sink, Source}
 import akka.testkit.TestKit
 import com.github.matsluni.akkahttpspi.AkkaHttpClient
 import org.scalatest._
@@ -17,11 +16,9 @@ import software.amazon.awssdk.services.sqs.SqsAsyncClient
 import software.amazon.awssdk.services.sqs.model._
 
 import scala.concurrent.Future
+import scala.concurrent.duration._
 import scala.concurrent.java8.FuturesConvertersImpl.{CF, P}
 import scala.language.postfixOps
-import scala.concurrent.duration._
-
-import software.amazon.awssdk.services.sqs.model.QueueAttributeName.APPROXIMATE_NUMBER_OF_MESSAGES
 
 class MainSpec
   extends TestKit(ActorSystem("TestSystem"))
@@ -30,10 +27,17 @@ class MainSpec
     with BeforeAndAfterAll
     with BeforeAndAfterEach {
 
-  var queueUrl = ""
+  var queueUrl = ""   // Set as part of the test.
+  val queueName = "testQueue"
+  val testSqsEndpoint = "http://localhost:4576"
+  val sqsVisibilityTimeout = 1.second
+
+  val messageBody = "Example Body"
+
+
   implicit val awsSqsClient: SqsAsyncClient = SqsAsyncClient
     .builder()
-    .endpointOverride(URI.create("http://localhost:4576"))
+    .endpointOverride(URI.create(testSqsEndpoint))
     .credentialsProvider(StaticCredentialsProvider.create(AwsBasicCredentials.create("x", "x")))
     .region(Region.EU_CENTRAL_1)
     .httpClient(AkkaHttpClient.builder().withActorSystem(system).build())
@@ -42,12 +46,9 @@ class MainSpec
   override def afterAll(): Unit = {
     awsSqsClient.close()
     TestKit.shutdownActorSystem(system)
-    // shutdown(system)
     super.afterAll()
   }
 
-
-  val queueName = "testQueue"
 
   override def beforeEach(): Unit = {
 
@@ -60,31 +61,31 @@ class MainSpec
   override def afterEach(): Unit = {
     val deleteQueueRequest: DeleteQueueRequest =
       DeleteQueueRequest.builder.queueUrl(queueUrl).build()
-    val result: CompletableFuture[DeleteQueueResponse] = awsSqsClient.deleteQueue(deleteQueueRequest)
-    val resultExecuted: DeleteQueueResponse = result.get()
+    awsSqsClient.deleteQueue(deleteQueueRequest).get()
     super.afterEach()
   }
-
-  case class TestMessage(context: String)
-
-  val messageBody = "Example Body"
 
 
   "SqsService" should "receive a message" in {
 
     implicit val mat: ActorMaterializer = ActorMaterializer()
-    // Arrange
-    val x: (Source[Message, UniqueKillSwitch], Sink[MessageAction, Future[Done]]) =
-      new SqsService(queueUrl).create(queueUrl, maxMessagesInFlight = 20)
-    val (sqsSource, sqsSink) = x
 
-    var processedMessageCount = 0
+    val sourceSettings = SqsSourceSettings()
+      .withCloseOnEmptyReceive(true)    // When there are no more messages, close down the pipeline
+      .withWaitTime(10.milliseconds)    // Wait 10ms for messages before closing
+      .withVisibilityTimeout(sqsVisibilityTimeout)  // sqs message visibility timeout
 
-    // Send message to SQS (synchronous)
+    val (sqsSource, sqsSink): (Source[Message, UniqueKillSwitch], Sink[MessageAction, Future[Done]]) =
+      new SqsService(queueUrl).create(
+        queueUrl,
+        maxMessagesInFlight = 20,
+        sourceSettings= sourceSettings)
+
     val sendMessageRequest: SendMessageRequest =
       SendMessageRequest.builder().queueUrl(queueUrl).messageBody(messageBody).build()
-    val result: CompletableFuture[SendMessageResponse] = awsSqsClient.sendMessage(sendMessageRequest)
-    val resultExecuted = result.get()
+    awsSqsClient.sendMessage(sendMessageRequest).get()
+
+    var processedMessageCount = 0
 
     val pipeline: (UniqueKillSwitch, Future[Done]) = sqsSource
       .map(m => {
@@ -99,8 +100,9 @@ class MainSpec
 
     val endAssertion = for {
       _ <- pipeline._2
+      _ <- akka.pattern.after(500.milliseconds, using = system.scheduler)(Future(Done.done()))
       _ = processedMessageCount should === (1)
-      _ <- akka.pattern.after(2.seconds, using = system.scheduler)(Future(Done.done()))
+      _ <- akka.pattern.after(2*sqsVisibilityTimeout, using = system.scheduler)(Future(Done.done()))
       messagesLeft <- hasAnyMessages(queueUrl)
       assertNoMessagesLeft = messagesLeft should === (false)
     } yield assertNoMessagesLeft
@@ -116,7 +118,13 @@ class MainSpec
     toScala(x)
   }
 
-    def toScala[T](cs: CompletionStage[T]): Future[T] = {
+  def sendMessage(queueUrl: String, msgBody: String) = {
+    val sendMessageRequest: SendMessageRequest =
+      SendMessageRequest.builder().queueUrl(queueUrl).messageBody(messageBody).build()
+    toScala(awsSqsClient.sendMessage(sendMessageRequest))
+  }
+
+  def toScala[T](cs: CompletionStage[T]): Future[T] = {
     cs match {
       case cf: CF[T] => cf.wrapped
       case _ =>
