@@ -1,6 +1,7 @@
 
 import java.net.URI
-import java.util.concurrent.CompletableFuture
+import java.util
+import java.util.concurrent.{CompletableFuture, CompletionStage}
 
 import akka.Done
 import akka.actor.ActorSystem
@@ -16,8 +17,11 @@ import software.amazon.awssdk.services.sqs.SqsAsyncClient
 import software.amazon.awssdk.services.sqs.model._
 
 import scala.concurrent.Future
+import scala.concurrent.java8.FuturesConvertersImpl.{CF, P}
 import scala.language.postfixOps
+import scala.concurrent.duration._
 
+import software.amazon.awssdk.services.sqs.model.QueueAttributeName.APPROXIMATE_NUMBER_OF_MESSAGES
 
 class MainSpec
   extends TestKit(ActorSystem("TestSystem"))
@@ -65,6 +69,7 @@ class MainSpec
 
   val messageBody = "Example Body"
 
+
   "SqsService" should "receive a message" in {
 
     implicit val mat: ActorMaterializer = ActorMaterializer()
@@ -86,21 +91,54 @@ class MainSpec
         processedMessageCount = processedMessageCount + 1
         m
       })
-      .map(m => {
-        val r= MessageAction.delete(m)
-        r
-        MessageAction.ignore(m)
-      })
+      .map(m =>
+        MessageAction.delete(m)
+      )
       .toMat(sqsSink)(Keep.both)
       .run()
 
-    val resultAssertion: Future[Assertion] = pipeline._2.map[Assertion](_ => {
-      processedMessageCount should ===(1)
-    })
+    val endAssertion = for {
+      _ <- pipeline._2
+      _ = processedMessageCount should === (1)
+      _ <- akka.pattern.after(2.seconds, using = system.scheduler)(Future(Done.done()))
+      messagesLeft <- hasAnyMessages(queueUrl)
+      assertNoMessagesLeft = messagesLeft should === (false)
+    } yield assertNoMessagesLeft
+    endAssertion
+  }
 
-    // and should wait a bit and confirm there are no messages left in the queue.
+  def hasAnyMessages(queueUrl: String): Future[Boolean] =
+    getQueueAttributes(queueUrl).map(getApproximateAvailableMessageCount _).map(c => c > 0)
 
-    resultAssertion
+  def toInt(s: String): Option[Int] = {
+    try {
+      Some(s.toInt)
+    } catch {
+      case e: Exception => None
+    }
+  }
+
+  def getApproximateAvailableMessageCount(attributes: GetQueueAttributesResponse): Int = {
+    val a: util.Map[QueueAttributeName, String] = attributes.attributes()
+    val b = a.get(APPROXIMATE_NUMBER_OF_MESSAGES)
+    toInt(b).fold(0)(identity)
+  }
+
+
+  def getQueueAttributes(queueUrl: String): Future[GetQueueAttributesResponse] = {
+    val getQueueAttributesRequest = GetQueueAttributesRequest.builder().queueUrl(queueUrl).build()
+    val x: CompletableFuture[GetQueueAttributesResponse] = awsSqsClient.getQueueAttributes(getQueueAttributesRequest)
+    toScala(x)
+  }
+
+    def toScala[T](cs: CompletionStage[T]): Future[T] = {
+    cs match {
+      case cf: CF[T] => cf.wrapped
+      case _ =>
+        val p = new P[T](cs)
+        cs whenComplete p
+        p.future
+    }
   }
 }
 
