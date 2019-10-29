@@ -108,26 +108,11 @@ class MainSpec
   }
 
   def hasAnyMessages(queueUrl: String): Future[Boolean] =
-    getQueueAttributes(queueUrl).map(getApproximateAvailableMessageCount _).map(c => c > 0)
+    getQueueMessage(queueUrl).map(resp => resp.messages().size() > 0)
 
-  def toInt(s: String): Option[Int] = {
-    try {
-      Some(s.toInt)
-    } catch {
-      case e: Exception => None
-    }
-  }
-
-  def getApproximateAvailableMessageCount(attributes: GetQueueAttributesResponse): Int = {
-    val a: util.Map[QueueAttributeName, String] = attributes.attributes()
-    val b = a.get(APPROXIMATE_NUMBER_OF_MESSAGES)
-    toInt(b).fold(0)(identity)
-  }
-
-
-  def getQueueAttributes(queueUrl: String): Future[GetQueueAttributesResponse] = {
-    val getQueueAttributesRequest = GetQueueAttributesRequest.builder().queueUrl(queueUrl).build()
-    val x: CompletableFuture[GetQueueAttributesResponse] = awsSqsClient.getQueueAttributes(getQueueAttributesRequest)
+  def getQueueMessage(queueUrl: String): Future[ReceiveMessageResponse] = {
+    val receiveMessageRequest: ReceiveMessageRequest = ReceiveMessageRequest.builder().queueUrl(queueUrl).maxNumberOfMessages(10).build()
+    val x = awsSqsClient.receiveMessage(receiveMessageRequest)
     toScala(x)
   }
 
