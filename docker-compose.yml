@@ -12,6 +12,7 @@ services:
         hard: -1
     ports:
       - 9200:9200
+      - 9201:9201
       - 9300:9300
     volumes:
       - esdata01:/usr/share/elasticsearch/data
