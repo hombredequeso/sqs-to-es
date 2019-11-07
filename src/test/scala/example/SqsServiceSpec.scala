@@ -20,7 +20,7 @@ import scala.concurrent.duration._
 import scala.concurrent.java8.FuturesConvertersImpl.{CF, P}
 import scala.language.postfixOps
 
-class MainSpec
+class SqsServiceSpec
   extends TestKit(ActorSystem("TestSystem"))
     with AsyncFlatSpecLike
     with Matchers
@@ -124,6 +124,7 @@ class MainSpec
     toScala(awsSqsClient.sendMessage(sendMessageRequest))
   }
 
+  // Convert java CompletableFuture to a scala Future
   def toScala[T](cs: CompletionStage[T]): Future[T] = {
     cs match {
       case cf: CF[T] => cf.wrapped

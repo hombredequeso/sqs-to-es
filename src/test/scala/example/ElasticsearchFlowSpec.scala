@@ -57,33 +57,30 @@ class ElasticsearchFlowSpec
   case class Message[T](e: T)
 
   "Elasticsearch Stream" should "use passthrough to maintain original message" in {
-    val esWriterSettings = ElasticsearchWriteSettings()
-      .withBufferSize(5)
-      .withVersionType("internal")
-      .withRetryLogic(RetryAtFixedRate(maxRetries = 5, retryInterval = 1.second))
 
-    val entities: Seq[Message[Entity]] =
+    val sourceMessages: Seq[Message[Entity]] =
       (1 to 50)
         .map(i => Entity(i, s"entity #${i}"))
         .map(Message(_))
 
-    val source = Source(entities)
+    val esWriterSettings = ElasticsearchWriteSettings()
+      .withBufferSize(5)
+      .withVersionType("internal")
+      .withRetryLogic(RetryAtFixedRate(maxRetries = 5, retryInterval = 1.second))
     val esFlow =
       ElasticsearchFlow.createWithPassThrough[Entity, Message[Entity]]("entity2", "_doc", esWriterSettings)
 
-    val r: Future[Seq[Message[Entity]]] = source
+    val successfulWrites: Future[Seq[(Message[Entity], WriteResult[Entity, Message[Entity]])]] =
+      Source(sourceMessages)
       .map(m => WriteMessage.createUpsertMessage(m.e.id.toString, m.e).withPassThrough(m))
       .via(esFlow)
-      .map(wr => (wr.message.passThrough, wr.success, wr))
-      .map({case((msg, success, wr)) => {
-        println(s"Result: ${success}; message = ${msg}")
-        msg
-      }})
-
+      .map(wr => (wr.message.passThrough, wr))
+      .wireTap(x => println(s"Result: ${x._2.success}; message = ${x._1}"))
+      .filter(_._2.success)
       .runWith(Sink.seq)
 
-    val result: Seq[Message[Entity]] =
-      Await.result(r, 3.seconds)
-    result.sortBy(x => x.e.id) should ===(entities)
+    val result: Seq[(Message[Entity], WriteResult[Entity, Message[Entity]])] =
+      Await.result(successfulWrites, 3.seconds)
+    result.map(_._1).sortBy(x => x.e.id) should ===(sourceMessages)
   }
 }
