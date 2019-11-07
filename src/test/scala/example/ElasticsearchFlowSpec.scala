@@ -70,15 +70,20 @@ class ElasticsearchFlowSpec
     val source = Source(entities)
     val esFlow =
       ElasticsearchFlow.createWithPassThrough[Entity, Message[Entity]]("entity2", "_doc", esWriterSettings)
-    val sink = Sink.ignore
 
-    val r = source
+    val r: Future[Seq[Message[Entity]]] = source
       .map(m => WriteMessage.createUpsertMessage(m.e.id.toString, m.e).withPassThrough(m))
       .via(esFlow)
       .map(wr => (wr.message.passThrough, wr.success, wr))
-      .map({case((msg, success, wr)) => println(s"Result: ${success}; message = ${msg}")})
-      .runWith(sink)
+      .map({case((msg, success, wr)) => {
+        println(s"Result: ${success}; message = ${msg}")
+        msg
+      }})
 
-    Await.result(r, 3.seconds)
+      .runWith(Sink.seq)
+
+    val result: Seq[Message[Entity]] =
+      Await.result(r, 3.seconds)
+    result.sortBy(x => x.e.id) should ===(entities)
   }
 }
