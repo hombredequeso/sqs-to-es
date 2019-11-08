@@ -1,21 +1,19 @@
 package example
 
-import akka.{Done, NotUsed}
+import akka.NotUsed
 import akka.actor.ActorSystem
+import akka.stream.ActorMaterializer
+import akka.stream.alpakka.elasticsearch._
 import akka.stream.alpakka.elasticsearch.scaladsl.ElasticsearchFlow
-import akka.stream.{ActorMaterializer, FlowShape, Graph}
-import akka.stream.scaladsl.{Broadcast, Flow, GraphDSL, Keep, RunnableGraph, Sink, Source, ZipWith}
-import org.scalatest.{FlatSpec, Matchers}
-
-import scala.concurrent.duration._
-import scala.concurrent.{Await, ExecutionContext, Future}
+import akka.stream.scaladsl.{Flow, Sink, Source}
 import org.apache.http.HttpHost
 import org.elasticsearch.client.RestClient
+import org.scalatest.{FlatSpec, Matchers}
+import spray.json.DefaultJsonProtocol._
 import spray.json._
-import DefaultJsonProtocol._
-import akka.stream.alpakka.elasticsearch._
 
 import scala.concurrent.ExecutionContext.Implicits.global
+import scala.concurrent.duration._
 
 class ElasticsearchFlowSpec extends FlatSpec with Matchers {
 
