@@ -20,6 +20,10 @@ import scala.concurrent.duration._
 import scala.concurrent.java8.FuturesConvertersImpl.{CF, P}
 import scala.language.postfixOps
 
+class AkkaSqsTestFixture {
+
+}
+
 class SqsServiceSpec
   extends TestKit(ActorSystem("TestSystem"))
     with AsyncFlatSpecLike
@@ -65,7 +69,6 @@ class SqsServiceSpec
     super.afterEach()
   }
 
-
   "SqsService" should "receive a message" in {
 
     implicit val mat: ActorMaterializer = ActorMaterializer()
@@ -81,27 +84,23 @@ class SqsServiceSpec
         maxMessagesInFlight = 20,
         sourceSettings= sourceSettings)
 
-    val sendMessageRequest: SendMessageRequest =
-      SendMessageRequest.builder().queueUrl(queueUrl).messageBody(messageBody).build()
-    awsSqsClient.sendMessage(sendMessageRequest).get()
+    var processedMessages = List[String]()
 
-    var processedMessageCount = 0
 
-    val pipeline: (UniqueKillSwitch, Future[Done]) = sqsSource
-      .map(m => {
-        processedMessageCount = processedMessageCount + 1
-        m
+    val pipeline: RunnableGraph[(UniqueKillSwitch, Future[Done])] = sqsSource
+      .wireTap(m => {
+        processedMessages = m.body() :: processedMessages
       })
       .map(m =>
         MessageAction.delete(m)
       )
       .toMat(sqsSink)(Keep.both)
-      .run()
 
     val endAssertion = for {
-      _ <- pipeline._2
+      _ <- sendMessage(queueUrl, messageBody)
+      _ <- pipeline.run()._2
       _ <- akka.pattern.after(500.milliseconds, using = system.scheduler)(Future(Done.done()))
-      _ = processedMessageCount should === (1)
+      _ = processedMessages should === (List(messageBody))
       _ <- akka.pattern.after(2*sqsVisibilityTimeout, using = system.scheduler)(Future(Done.done()))
       messagesLeft <- hasAnyMessages(queueUrl)
       assertNoMessagesLeft = messagesLeft should === (false)

@@ -95,7 +95,6 @@ class StreamingSpec
       i.toString
   }
 
-
   import scala.util.Try
 
   "Pass through" should "unzip and zip correctly even where there are errors" in {
