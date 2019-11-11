@@ -2,13 +2,12 @@
 import java.net.URI
 import java.util.concurrent.{CompletableFuture, CompletionStage}
 
-import MessagerRecorder.Record
 import akka.Done
 import akka.actor.{Actor, ActorRef, ActorSystem, Props}
 import akka.stream._
 import akka.stream.alpakka.sqs.{MessageAction, SqsSourceSettings}
 import akka.stream.scaladsl.{Keep, RunnableGraph, Sink, Source}
-import akka.testkit.{ImplicitSender, TestActors, TestKit}
+import akka.testkit.{ImplicitSender, TestActors, TestKit, TestProbe}
 import com.github.matsluni.akkahttpspi.AkkaHttpClient
 import org.scalatest._
 import software.amazon.awssdk.auth.credentials.{AwsBasicCredentials, StaticCredentialsProvider}
@@ -18,24 +17,12 @@ import software.amazon.awssdk.services.sqs.model._
 
 import scala.collection.mutable
 import scala.collection.mutable.ListBuffer
-import scala.concurrent.Future
+import scala.concurrent.{ExecutionContext, Future}
 import scala.concurrent.duration._
 import scala.concurrent.java8.FuturesConvertersImpl.{CF, P}
 import scala.language.postfixOps
+import scala.util.Try
 
-
-object MessagerRecorder {
-  case class Record(m: String)
-}
-
-class MessageRecorder(var messages:  ListBuffer[String]) extends Actor {
-
-  override def receive: Receive = {
-    case Record(m) => {
-      messages += m
-    }
-  }
-}
 
 class SqsServiceSpec
   extends TestKit(ActorSystem("TestSystem"))
@@ -51,7 +38,7 @@ class SqsServiceSpec
   val sqsVisibilityTimeout = 1.second
 
   val messageBody = "Example Body"
-
+  val messages = List(messageBody, "msg2")
 
   implicit val awsSqsClient: SqsAsyncClient = SqsAsyncClient
     .builder()
@@ -66,7 +53,6 @@ class SqsServiceSpec
     TestKit.shutdownActorSystem(system)
     super.afterAll()
   }
-
 
   override def beforeEach(): Unit = {
 
@@ -85,6 +71,7 @@ class SqsServiceSpec
 
   "SqsService" should "receive a message" in {
 
+    val ec: ExecutionContext = this.executionContext
     implicit val mat: ActorMaterializer = ActorMaterializer()
 
     val sourceSettings = SqsSourceSettings()
@@ -98,29 +85,28 @@ class SqsServiceSpec
         maxMessagesInFlight = 20,
         sourceSettings= sourceSettings)
 
-    var msgs = ListBuffer[String]()
-    val messageRecorder: ActorRef = system.actorOf(Props(new MessageRecorder(msgs)), "messageRecorderActor")
-
+    val probe = TestProbe()
 
     val pipeline: RunnableGraph[(UniqueKillSwitch, Future[Done])] = sqsSource
-      .wireTap(m => messageRecorder ! Record(m.body()))
-      .map(m =>
-        MessageAction.delete(m)
-      )
+      .wireTap(probe.ref ! _.body)
+      .map(MessageAction.delete(_))
       .toMat(sqsSink)(Keep.both)
 
     val endAssertion = for {
-      _ <- sendMessage(queueUrl, messageBody)
+      _ <- Future.traverse(messages)(new SqsQueue().sendMessage(queueUrl, _))
       _ <- pipeline.run()._2
       _ <- akka.pattern.after(500.milliseconds, using = system.scheduler)(Future(Done.done()))
-      _ = msgs should ===(ListBuffer(messageBody))
+      _ = probe.receiveN(messages.length) should ===(messages)
       _ <- akka.pattern.after(2*sqsVisibilityTimeout, using = system.scheduler)(Future(Done.done()))
-      messagesLeft <- hasAnyMessages(queueUrl)
+      messagesLeft <- new SqsQueue().hasAnyMessages(queueUrl)
       assertNoMessagesLeft = messagesLeft should === (false)
     } yield assertNoMessagesLeft
     endAssertion
   }
 
+}
+
+class SqsQueue(implicit awsSqsClient: SqsAsyncClient, ec: ExecutionContext) {
   def hasAnyMessages(queueUrl: String): Future[Boolean] =
     getQueueMessage(queueUrl).map(resp => resp.messages().size() > 0)
 
@@ -132,7 +118,7 @@ class SqsServiceSpec
 
   def sendMessage(queueUrl: String, msgBody: String) = {
     val sendMessageRequest: SendMessageRequest =
-      SendMessageRequest.builder().queueUrl(queueUrl).messageBody(messageBody).build()
+      SendMessageRequest.builder().queueUrl(queueUrl).messageBody(msgBody).build()
     toScala(awsSqsClient.sendMessage(sendMessageRequest))
   }
 
@@ -146,5 +132,6 @@ class SqsServiceSpec
         p.future
     }
   }
+
 }
 
