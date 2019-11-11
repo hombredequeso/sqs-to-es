@@ -2,12 +2,13 @@
 import java.net.URI
 import java.util.concurrent.{CompletableFuture, CompletionStage}
 
+import MessagerRecorder.Record
 import akka.Done
-import akka.actor.ActorSystem
+import akka.actor.{Actor, ActorRef, ActorSystem, Props}
 import akka.stream._
 import akka.stream.alpakka.sqs.{MessageAction, SqsSourceSettings}
 import akka.stream.scaladsl.{Keep, RunnableGraph, Sink, Source}
-import akka.testkit.TestKit
+import akka.testkit.{ImplicitSender, TestActors, TestKit}
 import com.github.matsluni.akkahttpspi.AkkaHttpClient
 import org.scalatest._
 import software.amazon.awssdk.auth.credentials.{AwsBasicCredentials, StaticCredentialsProvider}
@@ -15,17 +16,30 @@ import software.amazon.awssdk.regions.Region
 import software.amazon.awssdk.services.sqs.SqsAsyncClient
 import software.amazon.awssdk.services.sqs.model._
 
+import scala.collection.mutable
+import scala.collection.mutable.ListBuffer
 import scala.concurrent.Future
 import scala.concurrent.duration._
 import scala.concurrent.java8.FuturesConvertersImpl.{CF, P}
 import scala.language.postfixOps
 
-class AkkaSqsTestFixture {
 
+object MessagerRecorder {
+  case class Record(m: String)
+}
+
+class MessageRecorder(var messages:  ListBuffer[String]) extends Actor {
+
+  override def receive: Receive = {
+    case Record(m) => {
+      messages += m
+    }
+  }
 }
 
 class SqsServiceSpec
   extends TestKit(ActorSystem("TestSystem"))
+    with ImplicitSender
     with AsyncFlatSpecLike
     with Matchers
     with BeforeAndAfterAll
@@ -84,13 +98,12 @@ class SqsServiceSpec
         maxMessagesInFlight = 20,
         sourceSettings= sourceSettings)
 
-    var processedMessages = List[String]()
+    var msgs = ListBuffer[String]()
+    val messageRecorder: ActorRef = system.actorOf(Props(new MessageRecorder(msgs)), "messageRecorderActor")
 
 
     val pipeline: RunnableGraph[(UniqueKillSwitch, Future[Done])] = sqsSource
-      .wireTap(m => {
-        processedMessages = m.body() :: processedMessages
-      })
+      .wireTap(m => messageRecorder ! Record(m.body()))
       .map(m =>
         MessageAction.delete(m)
       )
@@ -100,7 +113,7 @@ class SqsServiceSpec
       _ <- sendMessage(queueUrl, messageBody)
       _ <- pipeline.run()._2
       _ <- akka.pattern.after(500.milliseconds, using = system.scheduler)(Future(Done.done()))
-      _ = processedMessages should === (List(messageBody))
+      _ = msgs should ===(ListBuffer(messageBody))
       _ <- akka.pattern.after(2*sqsVisibilityTimeout, using = system.scheduler)(Future(Done.done()))
       messagesLeft <- hasAnyMessages(queueUrl)
       assertNoMessagesLeft = messagesLeft should === (false)
