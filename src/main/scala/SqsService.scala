@@ -1,3 +1,5 @@
+package com.hombredequeso.sqstoes
+
 import java.net.URI
 
 import akka.Done

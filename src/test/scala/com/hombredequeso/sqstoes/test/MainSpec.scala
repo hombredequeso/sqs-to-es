@@ -1,8 +1,8 @@
-package example
+package com.hombredequeso.sqstoes.test
 
 import akka.actor.ActorSystem
 import akka.testkit.TestKit
-import org.scalatest.{AsyncFlatSpecLike, BeforeAndAfterAll, BeforeAndAfterEach, FlatSpec, Matchers}
+import org.scalatest.{AsyncFlatSpecLike, BeforeAndAfterAll, BeforeAndAfterEach, Matchers}
 
 class MainSpec
   extends TestKit(ActorSystem("TestSystem"))

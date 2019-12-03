@@ -1,4 +1,4 @@
-package example
+package com.hombredequeso.sqstoes.test
 
 import akka.NotUsed
 import akka.actor.ActorSystem

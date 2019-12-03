@@ -1,3 +1,5 @@
+package com.hombredequeso.sqstoes
+
 import java.nio.file.{Path, Paths}
 
 import akka.{Done, NotUsed}

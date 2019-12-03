@@ -1,9 +1,9 @@
-package example
+package com.hombredequeso.sqstoes.test
 
 import akka.NotUsed
 import akka.actor.ActorSystem
-import akka.stream.{ActorMaterializer, FlowShape, Graph}
 import akka.stream.scaladsl.{Broadcast, Flow, GraphDSL, Keep, Sink, Source, ZipWith}
+import akka.stream.{ActorMaterializer, FlowShape, Graph}
 import org.scalatest.{FlatSpec, Matchers}
 
 import scala.concurrent.duration._

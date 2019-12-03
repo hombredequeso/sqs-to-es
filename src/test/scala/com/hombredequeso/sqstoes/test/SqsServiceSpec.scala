@@ -1,3 +1,4 @@
+package com.hombredequeso.sqstoes.test
 
 import java.net.URI
 import java.util.concurrent.{CompletableFuture, CompletionStage}
@@ -9,6 +10,7 @@ import akka.stream.alpakka.sqs.{MessageAction, SqsSourceSettings}
 import akka.stream.scaladsl.{Keep, RunnableGraph, Sink, Source}
 import akka.testkit.{TestKit, TestProbe}
 import com.github.matsluni.akkahttpspi.AkkaHttpClient
+import com.hombredequeso.sqstoes.SqsService
 import org.scalatest._
 import software.amazon.awssdk.auth.credentials.{AwsBasicCredentials, StaticCredentialsProvider}
 import software.amazon.awssdk.regions.Region
@@ -71,7 +73,7 @@ object SqsServiceSpec {
     .withVisibilityTimeout(sqsVisibilityTimeout)  // sqs message visibility timeout
 }
 
-import SqsServiceSpec._
+import com.hombredequeso.sqstoes.test.SqsServiceSpec._
 
 class SqsServiceSpec
   extends SqsTestBase(
