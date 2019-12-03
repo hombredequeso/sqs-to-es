@@ -47,7 +47,6 @@ class SqsTestBase(queueName: String, sqsEndpoint: String)
   }
 
   override def beforeEach(): Unit = {
-
     val createQueueRequest: CreateQueueRequest = CreateQueueRequest.builder().queueName(queueName).build()
     val queue: CompletableFuture[CreateQueueResponse] = awsSqsClient.createQueue(createQueueRequest)
     queueUrl = queue.get().queueUrl()
@@ -65,6 +64,11 @@ class SqsTestBase(queueName: String, sqsEndpoint: String)
 object SqsServiceSpec {
   val queueName = "testQueue"
   val testSqsEndpoint = "http://localhost:4576"
+  val sqsVisibilityTimeout = 1.second
+  val sourceSettings = SqsSourceSettings()
+    .withCloseOnEmptyReceive(true)    // When there are no more messages, close down the pipeline
+    .withWaitTime(10.milliseconds)    // Wait 10ms for messages before closing
+    .withVisibilityTimeout(sqsVisibilityTimeout)  // sqs message visibility timeout
 }
 
 import SqsServiceSpec._
@@ -74,38 +78,26 @@ class SqsServiceSpec
     queueName,
     testSqsEndpoint) {
 
-  val sqsVisibilityTimeout = 1.second
-  val messageBody = "Example Body"
-  val messages = List(messageBody, "msg2")
-
   "SqsService" should "receive a message" in {
 
-    val sourceSettings = SqsSourceSettings()
-      .withCloseOnEmptyReceive(true)    // When there are no more messages, close down the pipeline
-      .withWaitTime(10.milliseconds)    // Wait 10ms for messages before closing
-      .withVisibilityTimeout(sqsVisibilityTimeout)  // sqs message visibility timeout
-
+    val msgs = List.range(0,20).map(i => f"test-message-$i%03d")
     val (sqsSource, sqsSink): (Source[Message, UniqueKillSwitch], Sink[MessageAction, Future[Done]]) =
       new SqsService(queueUrl).create(
         queueUrl,
-        maxMessagesInFlight = 20,
+        maxMessagesInFlight = 6,
         sourceSettings= sourceSettings)
-
     val probe = TestProbe()
-
     val pipeline: RunnableGraph[(UniqueKillSwitch, Future[Done])] = sqsSource
       .wireTap(probe.ref ! _.body)
       .map(MessageAction.delete(_))
       .toMat(sqsSink)(Keep.both)
 
-
     for {
-      _ <- Future.traverse(messages)(SqsQueue.sendMessage(queueUrl, _))
+      _ <- Future.traverse(msgs)(SqsQueue.sendMessage(queueUrl, _))
       _ <- pipeline.run()._2
-      _ <- akka.pattern.after(500.milliseconds, using = system.scheduler)(Future(Done.done()))
-      _ = probe.receiveN(messages.length) should ===(messages)
-      b <- SqsQueue.assertQueueEmpty(sqsVisibilityTimeout, queueUrl)
-    } yield b
+      _ = probe.receiveN(msgs.length).asInstanceOf[Vector[String]].sortBy(i=>i) should ===(msgs)
+      queueIsEmptyAssertion <- SqsQueue.assertQueueEmpty(sqsVisibilityTimeout, queueUrl)
+    } yield queueIsEmptyAssertion
   }
 }
 
