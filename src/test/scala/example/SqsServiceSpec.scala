@@ -20,21 +20,21 @@ import scala.concurrent.java8.FuturesConvertersImpl.{CF, P}
 import scala.concurrent.{ExecutionContext, Future}
 import scala.language.postfixOps
 
-class SqsTestBase
+class SqsTestBase(queueName: String, sqsEndpoint: String)
   extends TestKit(ActorSystem("TestSystem"))
     with AsyncFlatSpecLike
     with Matchers
     with BeforeAndAfterAll
     with BeforeAndAfterEach {
 
-  var queueUrl = ""   // Set as part of the test.
-  val queueName = "testQueue"
-  val testSqsEndpoint = "http://localhost:4576"
+  var queueUrl = ""   // Set when queue is created in beforeEach
 
+  implicit val mat: ActorMaterializer = ActorMaterializer()
 
+  // Settings are appropriate for localstack
   implicit val awsSqsClient: SqsAsyncClient = SqsAsyncClient
     .builder()
-    .endpointOverride(URI.create(testSqsEndpoint))
+    .endpointOverride(URI.create(sqsEndpoint))
     .credentialsProvider(StaticCredentialsProvider.create(AwsBasicCredentials.create("x", "x")))
     .region(Region.EU_CENTRAL_1)
     .httpClient(AkkaHttpClient.builder().withActorSystem(system).build())
@@ -62,17 +62,23 @@ class SqsTestBase
   }
 }
 
+object SqsServiceSpec {
+  val queueName = "testQueue"
+  val testSqsEndpoint = "http://localhost:4576"
+}
+
+import SqsServiceSpec._
+
 class SqsServiceSpec
-  extends SqsTestBase {
+  extends SqsTestBase(
+    queueName,
+    testSqsEndpoint) {
 
   val sqsVisibilityTimeout = 1.second
   val messageBody = "Example Body"
   val messages = List(messageBody, "msg2")
 
   "SqsService" should "receive a message" in {
-
-    val ec: ExecutionContext = this.executionContext
-    implicit val mat: ActorMaterializer = ActorMaterializer()
 
     val sourceSettings = SqsSourceSettings()
       .withCloseOnEmptyReceive(true)    // When there are no more messages, close down the pipeline
