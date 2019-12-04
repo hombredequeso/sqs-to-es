@@ -40,7 +40,6 @@ class MainSpec
 
 
   "Pipeline" should "take message from sqs and put in es then delete message" in {
-    val message = "abc"
 
     val (sqsSource, sqsSink): (Source[Message, UniqueKillSwitch], Sink[MessageAction, Future[Done]]) =
       new SqsService(queueUrl).create(
@@ -63,7 +62,10 @@ class MainSpec
       // wrap an Sqs Message in PipelineMessage wrapper
       .map(PipelineMessage(_))
       // Create the elasticsearch upsertMessage, with the PipelineMessage[Message] as the pass through
-      .map(m => WriteMessage.createUpsertMessage("1", Entity(1, m.e.body())).withPassThrough(m))
+      .map(m => {
+        val entity = m.e.body().parseJson.convertTo[Entity]
+        WriteMessage.createUpsertMessage(entity.id.toString, entity).withPassThrough(m)
+      })
       // Write to es
       .via(esFlow)
       // Get the passthrough PipelineMessage[Message] back.
@@ -76,8 +78,12 @@ class MainSpec
       .map(MessageAction.delete(_))
       .toMat(sqsSink)(Keep.both)
 
+    val entityList  =
+      List.range(0, 19)
+      .map(i => Entity(i, s"Entity $i"))
+      .map(e => e.toJson.compactPrint)
     for {
-      _ <- Future.traverse(List(message))(SqsQueue.sendMessage(queueUrl, _))
+      _ <- Future.traverse(entityList)(SqsQueue.sendMessage(queueUrl, _))
       _ <- pipeline.run()._2
       queueIsEmptyAssertion <- SqsQueue.assertQueueEmpty(sqsVisibilityTimeout, queueUrl)
     } yield queueIsEmptyAssertion
