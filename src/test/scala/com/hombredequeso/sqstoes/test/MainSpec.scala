@@ -42,11 +42,11 @@ class MainSpec
     val (sqsSource, sqsSink): (Source[Message, UniqueKillSwitch], Sink[MessageAction, Future[Done]]) =
       new SqsService(queueUrl).create(
         queueUrl,
-        maxMessagesInFlight = 6,
+        maxMessagesInFlight = 10,   // maximum number of messages being processed by AmazonSQSAsync at the same time
         sourceSettings= sourceSettings)
 
     val esWriterSettings = ElasticsearchWriteSettings()
-      .withBufferSize(1)
+      .withBufferSize(20)   // size of bulk POSTS to es when back-pressure applies
       .withVersionType("internal")
       .withRetryLogic(RetryAtFixedRate(maxRetries = 5, retryInterval = 1.second))
 
@@ -71,7 +71,7 @@ class MainSpec
       .toMat(sqsSink)(Keep.both)
 
     val entityList  =
-      List.range(0, 19)
+      List.range(0, 20)
       .map(i => Entity(i, s"Entity $i"))
       .map(e => e.toJson.compactPrint)
 
