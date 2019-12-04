@@ -9,8 +9,7 @@ import akka.stream.scaladsl.{Flow, Keep, RunnableGraph, Sink, Source}
 import com.hombredequeso.sqstoes.SqsService
 import org.apache.http.HttpHost
 import org.elasticsearch.client.RestClient
-import org.scalatest._
-import software.amazon.awssdk.services.sqs.model._
+import software.amazon.awssdk.services.sqs.model.Message
 import spray.json.DefaultJsonProtocol._
 import spray.json._
 
@@ -31,7 +30,6 @@ object MainSpec {
 import com.hombredequeso.sqstoes.test.SqsServiceSpec._
 
 case class Entity(id: Int, description: String)
-case class PipelineMessage[T](e: T)
 
 class MainSpec
   extends SqsTestBase(
@@ -55,33 +53,28 @@ class MainSpec
     implicit val client: RestClient = RestClient.builder(new HttpHost("localhost", 9200)).build()
     implicit val format: JsonFormat[Entity] = jsonFormat2(Entity)
 
-    val esFlow: Flow[WriteMessage[Entity, PipelineMessage[Message]], WriteResult[Entity, PipelineMessage[Message]], NotUsed] =
-      ElasticsearchFlow.createWithPassThrough[Entity, PipelineMessage[Message]]("entity3", "_doc", esWriterSettings)
+    val esFlow: Flow[WriteMessage[Entity, Message], WriteResult[Entity, Message], NotUsed] =
+      ElasticsearchFlow.createWithPassThrough[Entity, Message]("entity3", "_doc", esWriterSettings)
 
     val pipeline: RunnableGraph[(UniqueKillSwitch, Future[Done])] = sqsSource
-      // wrap an Sqs Message in PipelineMessage wrapper
-      .map(PipelineMessage(_))
-      // Create the elasticsearch upsertMessage, with the PipelineMessage[Message] as the pass through
+      // Create the elasticsearch upsertMessage, with the Sqs Message as the pass through
       .map(m => {
-        val entity = m.e.body().parseJson.convertTo[Entity]
+        val entity = m.body().parseJson.convertTo[Entity]
         WriteMessage.createUpsertMessage(entity.id.toString, entity).withPassThrough(m)
       })
       // Write to es
       .via(esFlow)
-      // Get the passthrough PipelineMessage[Message] back.
-      .map(wr => (wr.message.passThrough, wr))
-      .wireTap(x => println(s"Result: ${x._2.success}; message = ${x._1}"))
-      // Only continue if it was successful
-      .filter(_._2.success)
-      // Extract the original SQS Message
-      .map(x => x._1.e)
-      .map(MessageAction.delete(_))
+      // .wireTap(x => println(s"Result: ${x._2.success}; message = ${x._1}"))
+      // Only continue to delete the sqs message if it was successful
+      .filter(_.success)
+      .map(x => MessageAction.delete(x.message.passThrough))
       .toMat(sqsSink)(Keep.both)
 
     val entityList  =
       List.range(0, 19)
       .map(i => Entity(i, s"Entity $i"))
       .map(e => e.toJson.compactPrint)
+
     for {
       _ <- Future.traverse(entityList)(SqsQueue.sendMessage(queueUrl, _))
       _ <- pipeline.run()._2
