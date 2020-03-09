@@ -1,9 +1,12 @@
 # SQS to Elasticsearch using Akka Streams
 
-Run up the Localstack aws testing framework, and an elasticsearch instance using docker-compose.
-```
-docker-compose up
-```
+This repository is an experimental project using Akka Streams. It takes messages from SQS, adding document to elasticsearch.
+
+The docker-compose.yml runs up a local elasticsearch database and localstack SQS, for completely local dev testing.
+
+## Prerequisites
+* sbs
+* docker
 
 ## Run Locally
 The following will startup the required infrastructure locally, add one message to the sqs queue, startup the program which will process the queue, adding a document to elasticsearch.
