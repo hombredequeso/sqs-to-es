@@ -1,174 +1,113 @@
 package com.hombredequeso.sqstoes
 
-import java.nio.file.{Path, Paths}
+import java.net.URI
 
-import akka.{Done, NotUsed}
 import akka.actor.ActorSystem
+import akka.stream.alpakka.elasticsearch.scaladsl.ElasticsearchFlow
+import akka.stream.alpakka.elasticsearch.{ElasticsearchWriteSettings, RetryAtFixedRate, WriteMessage, WriteResult}
+import akka.stream.alpakka.sqs.{MessageAction, SqsSourceSettings}
+import akka.stream.scaladsl.{Broadcast, Flow, GraphDSL, Keep, RunnableGraph, Sink, Source, ZipWith}
 import akka.stream.{ActorMaterializer, FlowShape, Graph, UniqueKillSwitch}
-import akka.stream.alpakka.csv.scaladsl.CsvParsing
-import akka.stream.scaladsl.{Broadcast, FileIO, Flow, GraphDSL, Keep, Sink, Source, ZipWith}
-import akka.util.ByteString
+import akka.{Done, NotUsed}
 import org.apache.http.HttpHost
 import org.elasticsearch.client.RestClient
-import spray.json._
-import DefaultJsonProtocol._
-import akka.stream.alpakka.elasticsearch.{ElasticsearchWriteSettings, RetryAtFixedRate, WriteMessage, WriteResult}
-import akka.stream.alpakka.elasticsearch.scaladsl.{ElasticsearchFlow, ElasticsearchSink}
-import akka.stream.alpakka.sqs.MessageAction
 import software.amazon.awssdk.services.sqs.model.Message
+import spray.json.DefaultJsonProtocol._
+import spray.json._
 
+import scala.concurrent.{Await, Future}
 import scala.concurrent.duration._
-import scala.concurrent.Future
+import scala.io.StdIn
+import scala.language.postfixOps
 
-case class Person(id: String, firstName: String, lastName: String)
+//object PassThroughFlow {
+//  def apply[A, T](processingFlow: Flow[A, T, NotUsed]): Graph[FlowShape[A, (T, A)], NotUsed] =
+//    apply[A, T, (T, A)](processingFlow, Keep.both)
+//
+//  def apply[A, T, O](processingFlow: Flow[A, T, NotUsed], output: (T, A) => O): Graph[FlowShape[A, O], NotUsed] =
+//    Flow.fromGraph(GraphDSL.create() { implicit builder =>
+//      {
+//        import GraphDSL.Implicits._
+//
+//        val broadcast = builder.add(Broadcast[A](2))
+//        val zip = builder.add(ZipWith[T, A, O]((left, right) => output(left, right)))
+//
+//        // format: off
+//        broadcast.out(0) ~> processingFlow ~> zip.in0
+//        broadcast.out(1)         ~>           zip.in1
+//        // format: on
+//
+//        FlowShape(broadcast.in, zip.out)
+//      }
+//    })
+//}
 
-object PassThroughFlow {
-  def apply[A, T](processingFlow: Flow[A, T, NotUsed]): Graph[FlowShape[A, (T, A)], NotUsed] =
-    apply[A, T, (T, A)](processingFlow, Keep.both)
-
-  def apply[A, T, O](processingFlow: Flow[A, T, NotUsed], output: (T, A) => O): Graph[FlowShape[A, O], NotUsed] =
-    Flow.fromGraph(GraphDSL.create() { implicit builder =>
-      {
-        import GraphDSL.Implicits._
-
-        val broadcast = builder.add(Broadcast[A](2))
-        val zip = builder.add(ZipWith[T, A, O]((left, right) => output(left, right)))
-
-        // format: off
-        broadcast.out(0) ~> processingFlow ~> zip.in0
-        broadcast.out(1)         ~>           zip.in1
-        // format: on
-
-        FlowShape(broadcast.in, zip.out)
-      }
-    })
-}
+case class Entity(id: Int, description: String)
+// {'id':123,'description':'entity123'}
 
 object Main extends App {
 
-//  def transform(m: Message): Person = {
-//    val content = m.body()
-//    content.parseJson.convertTo[Person]
-//  }
-//
-//
-//  implicit val system = ActorSystem("QuickStart")
-//  implicit val materializer = ActorMaterializer()
-//
-//
-//  implicit val client: RestClient = RestClient.builder(new HttpHost("localhost", 9200)).build()
-//
-//  implicit val format: JsonFormat[Person] = jsonFormat3(Person)
-//
-//  val currentDirectory = new java.io.File(".").getCanonicalPath
-//  printf(currentDirectory)
-//
-//  var id = 0;
-//  val source = Source.single(ByteString("eins,zwei,drei\nharry;highpants"))
-//
-//  var path = Paths.get("data/names.csv")
-//
-//  val fileSource = FileIO.fromPath(path)
-//
-//  val processCsv: Flow[ByteString, List[String], NotUsed] = Flow[ByteString]
-//    .via(CsvParsing.lineScanner())
-//    .map(_.map(_.utf8String))
-//
-//
-//  val fieldsToPerson: Flow[List[String], Person, NotUsed] =
-//    Flow[List[String]].map(ss => {
-//      id = id + 1;
-//      Person(id.toString, ss(0), ss(1))
-//    })
-//
-//  val sinkSettings = ElasticsearchWriteSettings()
-//    .withBufferSize(100)
-//    .withVersionType("internal")
-//    .withRetryLogic(RetryAtFixedRate(maxRetries = 5, retryInterval = 1.second))
-//
-//  val esSink: Sink[WriteMessage[Person, NotUsed], Future[Done]] = ElasticsearchSink.create[Person](
-//      "person",
-//      typeName = "_doc",
-//      sinkSettings
-//    )
-//
-//  // Flow instead of sink.
-//  val esFlow: Flow[WriteMessage[Person, NotUsed], WriteResult[Person, NotUsed], NotUsed] = ElasticsearchFlow.create(
-//    "person",
-//    typeName = "_doc",
-//    sinkSettings
-//    )
-//
-//
-//  val transformFlow: Flow[Message, Person, NotUsed] = Flow[Message].map(transform _)
-//
-//  val msgToEs = esFlow.via(transformFlow)
-//
-//  val actuallyNeed: Flow[(Message, WriteMessage[Person, NotUsed]),(Message, WriteResult[Person, NotUsed]), NotUsed] = ???
-////    Flow.
-//
-//
-//  val actuallyNeed2: Flow[(Message, WriteMessage[Person, NotUsed]),(Message, WriteResult[Person, NotUsed]), NotUsed] = ???
-//    Flow[(Message, WriteMessage[Person, NotUsed])].map({case(msg, writeThingy) => esFlow(writeThingy)}).putItAllBackTogetherNowPeople
-//
-//  val sqsEndpoint: String = ???
-//
-//  val queueUrl: String = ???
-//
-//  val (sqsSource: Source[Message, UniqueKillSwitch],
-//      sqsSink: Sink[MessageAction, Future[Done]]) =
-//    new SqsService(sqsEndpoint).create(queueUrl, 10)
-//
-//  val s: Sink[Nothing, Future[Seq[Nothing]]] = Sink.seq;
-//
-//  implicit val ec = system.dispatcher
-//
-//  val myStream2 = sqsSource .map(m => (m, transform(_)))
-//    .map ( x => {
-//      val (msg: Message, person: Person) = x
-//      val r: WriteMessage[Person, NotUsed] = WriteMessage.createIndexMessage(person.id, person)
-//      (msg, r)
-//      r
-//    })
-//    .via(esFlow)
-//
-//    .map(MessageAction.delete(_))
-//    .runWith(sqsSink)
-//
-//
-//  val myStream3 = sqsSource
-//    .map(m => (m, transform(_)))
-//
-//    .map ( x => {
-//      val (msg: Message, person: Person) = x
-//      val r: WriteMessage[Person, NotUsed] = WriteMessage.createIndexMessage(person.id, person)
-//      val result: (Message, WriteMessage[Person, NotUsed]) = (msg, r)
-//      result
-//    })
-//    .via(actuallyNeed)
-//    // .via(esFlow)
-//    .map({case (msg, _) => MessageAction.delete(msg)})
-//    .runWith(sqsSink)
-//
-//  // SQS source
-//  // transform
-//  // esFlow
-//  // SQS delete action
-//  // SQS delete.
-//
-//  val myStream = fileSource
-//    .via(processCsv)
-//    .via(fieldsToPerson)
-//    .map { person: Person => {
-//      WriteMessage.createIndexMessage(person.id, person);
-//    }
-//    }
-//    .runWith(esSink)
-//  // val myStream = fileSource.via(processCsv).runForeach(ss => println(ss.mkString("::")))
-//  // val myStream = source.via(processCsv).runForeach(ss => println(ss.mkString("::")))
-//
-//  // implicit val ec = system.dispatcher
-//  myStream.onComplete(_ => system.terminate())
+  val queueUrl = "http://localhost:4576/queue/mainqueue"
+  val esUrl = "http://localhost:9200"
 
-  println("Finished!")
+  // Make queue. See:
+  // https://lobster1234.github.io/2017/04/05/working-with-localstack-command-line/
+
+  implicit val system = ActorSystem()
+  implicit val mat: ActorMaterializer = ActorMaterializer()
+
+  val sourceSettings = SqsSourceSettings()
+    .withVisibilityTimeout(5.second)  // sqs message visibility timeout
+//    .withCloseOnEmptyReceive(true)    // When there are no more messages, close down the pipeline
+//    .withWaitTime(10.milliseconds)    // Wait 10ms for messages before closing
+
+  val sqsService = new SqsService(queueUrl)
+
+  val (sqsSource, sqsSink): (Source[Message, UniqueKillSwitch], Sink[MessageAction, Future[Done]]) =
+    sqsService.create(
+      queueUrl,
+      maxMessagesInFlight = 10,   // maximum number of messages being processed by AmazonSQSAsync at the same time
+      sourceSettings= sourceSettings)
+
+  val esWriterSettings = ElasticsearchWriteSettings()
+    .withBufferSize(20)   // size of bulk POSTS to es when back-pressure applies
+    .withVersionType("internal")
+    .withRetryLogic(RetryAtFixedRate(maxRetries = 5, retryInterval = 1.second))
+
+  val uri = new URI(esUrl)
+  val esHttpHost = new HttpHost(uri.getHost, uri.getPort, uri.getScheme)
+  implicit val client: RestClient = RestClient.builder(esHttpHost).build()
+  implicit val format: JsonFormat[Entity] = jsonFormat2(Entity)
+
+  val esFlow: Flow[WriteMessage[Entity, Message], WriteResult[Entity, Message], NotUsed] =
+    ElasticsearchFlow.createWithPassThrough[Entity, Message]("entityx", "_doc", esWriterSettings)
+
+  val pipeline: RunnableGraph[(UniqueKillSwitch, Future[Done])] = sqsSource
+    // Create the elasticsearch upsertMessage, with the Sqs Message as the pass through
+    .map(m => {
+      val entity = m.body().parseJson.convertTo[Entity]
+      WriteMessage.createUpsertMessage(entity.id.toString, entity).withPassThrough(m)
+    })
+    // Write to es
+    .via(esFlow)
+    // .wireTap(x => println(s"Result: ${x._2.success}; message = ${x._1}"))
+    // Only continue to delete the sqs message if it was successful
+    .filter(_.success)
+    .map(x => MessageAction.delete(x.message.passThrough))
+    .toMat(sqsSink)(Keep.both)
+
+  val entityList  =
+    List.range(0, 20)
+      .map(i => Entity(i, s"Entity $i"))
+      .map(e => e.toJson.compactPrint)
+
+  val (killSwitch, futureDone): (UniqueKillSwitch, Future[Done]) = pipeline.run()
+
+  println(s"Running service. Press enter to stop.")
+  StdIn.readLine()
+
+  killSwitch.shutdown()
+  Await.ready(futureDone, 10 seconds)
+  sqsService.stop()
+  system.terminate()
 }
